@@ -3,6 +3,7 @@ import CartList from '../../../components/cashier/CartList';
 import PaymentMethodSelector from '../../../components/cashier/PaymentMethodSelector';
 import DiscountInput from '../../../components/cashier/DiscountInput';
 import CheckoutSummary from '../../../components/cashier/CheckoutSummary';
+import LogoutButton from '../../../components/auth/LogoutButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +14,9 @@ export default async function POSPage() {
         <ProductSearch />
       </div>
       <div className="space-y-6">
+        <div className="flex justify-end">
+          <LogoutButton />
+        </div>
         <CartList />
         <PaymentMethodSelector />
         <DiscountInput />
