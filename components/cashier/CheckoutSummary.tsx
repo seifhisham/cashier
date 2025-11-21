@@ -17,17 +17,43 @@ export default function CheckoutSummary() {
   const total = Math.max(0, subtotal - (discount || 0));
 
   async function onCheckout() {
-    const res = await completeSale();
-    alert(`Sale completed. Order ID: ${res.order_id}`);
+    try {
+      await completeSale();
+      // success toast is dispatched in the store
+    } catch (e: any) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('app:toast', {
+            detail: {
+              type: 'error',
+              title: 'Checkout failed',
+              description: e?.message || 'Please try again',
+            },
+          }) as any
+        );
+      }
+    }
   }
 
   return (
-    <div className="space-y-2 rounded-md border p-3">
-      <div className="flex justify-between"><span>Subtotal</span><span>{subtotal.toFixed(2)}</span></div>
-      <div className="flex justify-between"><span>Discount</span><span>-{(discount || 0).toFixed(2)}</span></div>
-      <div className="flex justify-between text-lg font-semibold border-t pt-2"><span>Total</span><span>{total.toFixed(2)}</span></div>
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="mb-2 text-sm font-semibold text-zinc-900 dark:text-zinc-100">Summary</div>
+      <div className="space-y-1 text-sm">
+        <div className="flex items-center justify-between text-zinc-700 dark:text-zinc-300">
+          <span>Subtotal</span>
+          <span>{subtotal.toFixed(2)}</span>
+        </div>
+        <div className="flex items-center justify-between text-zinc-700 dark:text-zinc-300">
+          <span>Discount</span>
+          <span>-{(discount || 0).toFixed(2)}</span>
+        </div>
+        <div className="flex items-center justify-between border-t border-zinc-200 pt-2 text-base font-semibold dark:border-zinc-800 dark:text-zinc-100">
+          <span>Total</span>
+          <span>{total.toFixed(2)}</span>
+        </div>
+      </div>
       <button
-        className="mt-2 w-full rounded-md bg-green-600 px-4 py-2 text-white disabled:opacity-50"
+        className="mt-3 h-10 w-full rounded-md bg-indigo-600 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
         onClick={onCheckout}
         disabled={subtotal <= 0}
       >
