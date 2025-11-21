@@ -4,6 +4,7 @@ import "./globals.css";
 import Link from "next/link";
 import AuthGate from "../components/auth/AuthGate";
 import LogoutButton from "../components/auth/LogoutButton";
+import Toaster from "../components/ui/Toaster";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,6 +31,26 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        {/* <header className="border-b bg-white">
+          <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
+            <Link href="/" className="text-lg font-semibold text-black">
+              Cashier
+            </Link>
+            <nav className="flex items-center gap-4">
+              <Link href="/" className="text-sm text-gray-600 hover:text-black">
+                Home
+              </Link>
+              <Link
+                href="/pos"
+                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+              >
+                POS
+              </Link>
+              <LogoutButton />
+            </nav>
+          </div>
+        </header> */}
+        <Toaster />
         {children}
       </body>
     </html>

@@ -13,17 +13,31 @@ export default function PaymentMethodSelector() {
   );
 
   return (
-    <div className="space-y-2">
-      <div className="text-sm font-medium">Payment Method</div>
-      <div className="flex items-center gap-4">
-        <label className="flex items-center gap-2">
-          <input type="radio" name="payment" value="cash" checked={payment_method === 'cash'} onChange={() => setPaymentMethod('cash')} />
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">Payment Method</div>
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => setPaymentMethod('cash')}
+          className={`h-9 rounded-md border px-3 text-sm font-medium transition-colors ${
+            payment_method === 'cash'
+              ? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-200 dark:border-indigo-400'
+              : 'border-slate-300 text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200'
+          }`}
+        >
           Cash
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="radio" name="payment" value="card" checked={payment_method === 'card'} onChange={() => setPaymentMethod('card')} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setPaymentMethod('card')}
+          className={`h-9 rounded-md border px-3 text-sm font-medium transition-colors ${
+            payment_method === 'card'
+              ? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-200 dark:border-indigo-400'
+              : 'border-slate-300 text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200'
+          }`}
+        >
           Card
-        </label>
+        </button>
       </div>
     </div>
   );

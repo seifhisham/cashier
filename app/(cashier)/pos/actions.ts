@@ -56,6 +56,25 @@ export async function searchProducts(query: string) {
   return (data ?? []) as unknown as ProductWithVariants[];
 }
 
+export async function searchProductsPaged(query: string, page = 1, pageSize = 20) {
+  const supabase = getServerSupabase();
+  let q = supabase
+    .from('products')
+    .select('*, product_variants(*), product_images(*)', { count: 'exact' })
+    .order('created_at', { ascending: false });
+
+  if (query && query.trim().length > 0) {
+    const term = query.trim();
+    q = q.or(`name.ilike.%${term}%,category.ilike.%${term}%`);
+  }
+
+  const from = Math.max(0, (page - 1) * pageSize);
+  const to = from + pageSize - 1;
+  const { data, error, count } = await q.range(from, to);
+  if (error) throw error;
+  return { items: (data ?? []) as unknown as ProductWithVariants[], count: count ?? 0 };
+}
+
 export async function getCart() {
   const supabase = getServerSupabase();
   const sessionId = await ensureSessionId();
@@ -94,13 +113,30 @@ export async function addToCart(productId: string, variantId: string) {
     .maybeSingle();
   if (exErr && exErr.code !== 'PGRST116') throw exErr;
 
+  // Fetch current stock for the variant
+  const { data: variant, error: varErr } = await (supabase as any)
+    .from('product_variants')
+    .select('id, stock_quantity')
+    .eq('id', variantId)
+    .single();
+  if (varErr) throw varErr;
+  const stock = Number(variant?.stock_quantity ?? 0);
+
   if (existing) {
+    const currentQty = Number(existing.quantity ?? 0);
+    if (currentQty >= stock) {
+      return { ok: false, error: 'Not enough stock for this variant.' } as const;
+    }
+    const nextQty = Math.min(currentQty + 1, stock);
     const { error } = await (supabase as any)
       .from('cart_items')
-      .update({ quantity: (existing.quantity ?? 0) + 1, updated_at: new Date().toISOString() } as any)
+      .update({ quantity: nextQty, updated_at: new Date().toISOString() } as any)
       .eq('id', existing.id);
     if (error) throw error;
   } else {
+    if (stock <= 0) {
+      return { ok: false, error: 'This variant is out of stock.' } as const;
+    }
     const { error } = await (supabase as any).from('cart_items').insert({
       session_id: sessionId,
       product_id: productId,
@@ -111,6 +147,7 @@ export async function addToCart(productId: string, variantId: string) {
   }
 
   revalidatePath('/pos');
+  return { ok: true } as const;
 }
 
 export async function updateCartQuantity(itemId: string, quantity: number) {
@@ -121,9 +158,35 @@ export async function updateCartQuantity(itemId: string, quantity: number) {
     revalidatePath('/pos');
     return;
   }
+  // Read the item's variant to enforce stock cap
+  const { data: itemRow, error: itemErr } = await (supabase as any)
+    .from('cart_items')
+    .select('variant_id')
+    .eq('id', itemId)
+    .single();
+  if (itemErr) throw itemErr;
+  const variantId = itemRow?.variant_id;
+  let cappedQty = quantity;
+  if (variantId) {
+    const { data: variant, error: varErr } = await (supabase as any)
+      .from('product_variants')
+      .select('stock_quantity')
+      .eq('id', variantId)
+      .single();
+    if (varErr) throw varErr;
+    const stock = Number(variant?.stock_quantity ?? 0);
+    cappedQty = Math.min(quantity, Math.max(0, stock));
+    if (cappedQty <= 0) {
+      const { error: delErr } = await (supabase as any).from('cart_items').delete().eq('id', itemId);
+      if (delErr) throw delErr;
+      revalidatePath('/pos');
+      return;
+    }
+  }
+
   const { error } = await (supabase as any)
     .from('cart_items')
-    .update({ quantity, updated_at: new Date().toISOString() } as any)
+    .update({ quantity: cappedQty, updated_at: new Date().toISOString() } as any)
     .eq('id', itemId);
   if (error) throw error;
   revalidatePath('/pos');
@@ -154,6 +217,14 @@ export async function checkout(input: { discount: number; payment_method: Paymen
     const total = unit * qty;
     return { it, unit, qty, total };
   });
+
+  // Enforce stock before creating the order
+  for (const l of lines) {
+    const available = num(l.it.product_variants?.stock_quantity ?? 0);
+    if (l.qty > available) {
+      throw new Error(`Insufficient stock for ${l.it.products?.name ?? 'item'} (${l.it.product_variants?.size ?? ''}/${l.it.product_variants?.color ?? ''}).`);
+    }
+  }
   const subtotal = lines.reduce((s, l) => s + l.total, 0);
   const discount = Math.max(0, input.discount || 0);
   const total_amount = Math.max(0, subtotal - discount);

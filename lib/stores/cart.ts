@@ -10,6 +10,8 @@ export type UIItem = {
   quantity: number;
   unit_price: number;
   line_total: number;
+  variant_id?: string;
+  product_id?: string;
 };
 
 export interface CartState {
@@ -44,11 +46,34 @@ export const useCartStore = create<CartState>((set: any, get: any) => ({
       quantity: it.quantity ?? 0,
       unit_price: it.unit_price,
       line_total: it.line_total,
+      variant_id: it.variant_id,
+      product_id: it.product_id,
     }));
     set({ items: uiItems, subtotal, loading: false });
   },
   async add(productId: string, variantId: string) {
-    await addToCart(productId, variantId);
+    const res = await addToCart(productId, variantId);
+    if (res && (res as any).ok === false && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('app:toast', {
+          detail: {
+            type: 'error',
+            title: 'Cannot add item',
+            description: (res as any).error ?? 'Unable to add item',
+          },
+        }) as any
+      );
+    }
+    if (res && (res as any).ok === true && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('app:toast', {
+          detail: {
+            type: 'success',
+            title: 'Added to cart',
+          },
+        }) as any
+      );
+    }
     await get().load();
   },
   async updateQty(itemId: string, quantity: number) {
@@ -71,6 +96,17 @@ export const useCartStore = create<CartState>((set: any, get: any) => ({
   async completeSale() {
     const res = await checkout({ discount: get().discount, payment_method: get().payment_method });
     set({ items: [], subtotal: 0, discount: 0 });
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('app:toast', {
+          detail: {
+            type: 'success',
+            title: 'Sale completed',
+            description: `Order ID: ${res.order_id}`,
+          },
+        }) as any
+      );
+    }
     return res;
   },
 }));
