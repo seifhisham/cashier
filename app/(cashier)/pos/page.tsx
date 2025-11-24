@@ -4,6 +4,8 @@ import PaymentMethodSelector from '../../../components/cashier/PaymentMethodSele
 import DiscountInput from '../../../components/cashier/DiscountInput';
 import CheckoutSummary from '../../../components/cashier/CheckoutSummary';
 import LogoutButton from '../../../components/auth/LogoutButton';
+import HoldResume from '../../../components/cashier/HoldResume';
+import ReturnsPanel from '../../../components/cashier/ReturnsPanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +21,8 @@ export default async function POSPage() {
         </div>
         <CartList />
         <PaymentMethodSelector />
+        <HoldResume />
+        <ReturnsPanel />
         {/* <DiscountInput /> */}
         <CheckoutSummary />
       </div>
