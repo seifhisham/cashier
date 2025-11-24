@@ -16,10 +16,241 @@ async function ensureSessionId() {
   if (!id) {
     id = nanoid(16);
     // cookie for 7 days
-    store.set(CART_COOKIE, id, { httpOnly: false, path: '/', maxAge: 60 * 60 * 24 * 7 });
+    store.set(CART_COOKIE, id, { httpOnly: false, path: '/', maxAge: 60 * 60 * 24 * 1 });
   }
   return id;
 }
+
+// Hold/Resume Carts
+export async function holdCurrentCart(label: string) {
+  const supabase = getServerSupabase();
+  const sessionId = await ensureSessionId();
+
+  const { data, error } = await (supabase as any)
+    .from('cart_items')
+    .select('*, products(*), product_variants(*)')
+    .eq('session_id', sessionId);
+  if (error) throw error;
+  const items = (data ?? []) as unknown as CartItemJoined[];
+  if (items.length === 0) {
+    return { ok: false, error: 'Cart is empty' } as const;
+  }
+
+  const lines = items.map((it) => {
+    const unit = num(it.products?.base_price) + num(it.product_variants?.price_adjustment);
+    const qty = it.quantity ?? 0;
+    const total = unit * qty;
+    return { it, unit, qty, total };
+  });
+  const subtotal = lines.reduce((s, l) => s + l.total, 0);
+
+  const { data: order, error: orderErr } = await (supabase as any)
+    .from('orders')
+    .insert({
+      user_id: null,
+      guest_email: null,
+      total_amount: String(subtotal),
+      status: 'held',
+      shipping_address: { hold_label: label, held_from_session: sessionId },
+    } as any)
+    .select('id')
+    .single();
+  if (orderErr) throw orderErr;
+  const orderId = order.id as string;
+
+  const orderItems = lines.map((l) => ({
+    order_id: orderId,
+    product_id: l.it.product_id!,
+    variant_id: l.it.variant_id!,
+    quantity: l.qty,
+    price_at_purchase: String(l.unit),
+  }));
+  const { error: oiErr } = await (supabase as any).from('order_items').insert(orderItems as any);
+  if (oiErr) throw oiErr;
+
+  const { error: delErr } = await (supabase as any).from('cart_items').delete().eq('session_id', sessionId);
+  if (delErr) throw delErr;
+  revalidatePath('/pos');
+  return { ok: true, order_id: orderId } as const;
+}
+
+export async function listHeldCarts() {
+  const supabase = getServerSupabase();
+  const { data, error } = await (supabase as any)
+    .from('orders')
+    .select('id, total_amount, status, created_at, shipping_address')
+    .eq('status', 'held')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return (data ?? []) as any[];
+}
+
+export async function resumeHeldCart(orderId: string) {
+  const supabase = getServerSupabase();
+  const sessionId = await ensureSessionId();
+
+  const { data: items, error: itemsErr } = await (supabase as any)
+    .from('order_items')
+    .select('product_id, variant_id, quantity')
+    .eq('order_id', orderId);
+  if (itemsErr) throw itemsErr;
+  const lines = (items ?? []) as Array<{ product_id: string; variant_id: string; quantity: number }>;
+  if (lines.length === 0) return { ok: false, error: 'No items in held cart' } as const;
+
+  // Merge into current cart with stock enforcement
+  for (const l of lines) {
+    const { data: existing, error: exErr } = await (supabase as any)
+      .from('cart_items')
+      .select('id, quantity')
+      .eq('session_id', sessionId)
+      .eq('product_id', l.product_id)
+      .eq('variant_id', l.variant_id)
+      .maybeSingle();
+    if (exErr && exErr.code !== 'PGRST116') throw exErr;
+
+    const { data: variant, error: varErr } = await (supabase as any)
+      .from('product_variants')
+      .select('stock_quantity')
+      .eq('id', l.variant_id)
+      .single();
+    if (varErr) throw varErr;
+    const stock = Number(variant?.stock_quantity ?? 0);
+    const desired = Math.max(0, Number(l.quantity ?? 0));
+    const nextQty = Math.min(stock, desired + Number(existing?.quantity ?? 0));
+    if (existing) {
+      if (nextQty > 0) {
+        const { error } = await (supabase as any)
+          .from('cart_items')
+          .update({ quantity: nextQty, updated_at: new Date().toISOString() } as any)
+          .eq('id', existing.id);
+        if (error) throw error;
+      }
+    } else {
+      if (nextQty > 0) {
+        const { error } = await (supabase as any).from('cart_items').insert({
+          session_id: sessionId,
+          product_id: l.product_id,
+          variant_id: l.variant_id,
+          quantity: nextQty,
+        } as any);
+        if (error) throw error;
+      }
+    }
+  }
+
+  // Mark order as resumed
+  const { error: upErr } = await (supabase as any)
+    .from('orders')
+    .update({ status: 'resumed' } as any)
+    .eq('id', orderId);
+  if (upErr) throw upErr;
+  revalidatePath('/pos');
+  return { ok: true } as const;
+}
+
+export async function deleteHeldCart(orderId: string) {
+  const supabase = getServerSupabase();
+  const { error } = await (supabase as any)
+    .from('orders')
+    .update({ status: 'held_deleted' } as any)
+    .eq('id', orderId);
+  if (error) throw error;
+  revalidatePath('/pos');
+}
+
+// Returns / Exchanges
+export async function getOrderForReturn(orderId: string) {
+  const supabase = getServerSupabase();
+  const { data: order, error } = await (supabase as any)
+    .from('orders')
+    .select('id, total_amount, status, created_at')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!order) return null;
+
+  const { data: items, error: itemsErr } = await (supabase as any)
+    .from('order_items')
+    .select('id, product_id, variant_id, quantity, price_at_purchase, products(*), product_variants(*)')
+    .eq('order_id', orderId);
+  if (itemsErr) throw itemsErr;
+  return { order, items } as any;
+}
+
+export async function processReturn(orderId: string, returns: Array<{ order_item_id: string; quantity: number }>) {
+  const supabase = getServerSupabase();
+  if (!Array.isArray(returns) || returns.length === 0) {
+    return { ok: false, error: 'No items selected for return' } as const;
+  }
+
+  // Fetch original items map
+  const ids = returns.map((r) => r.order_item_id);
+  const { data: origItems, error: oiErr } = await (supabase as any)
+    .from('order_items')
+    .select('id, order_id, product_id, variant_id, quantity, price_at_purchase')
+    .in('id', ids);
+  if (oiErr) throw oiErr;
+  const byId = new Map<string, any>((origItems ?? []).map((x: any) => [x.id, x]));
+
+  let totalRefund = 0;
+  const lines: Array<{ product_id: string; variant_id: string; quantity: number; price_at_purchase: string }> = [];
+  for (const r of returns) {
+    const orig = byId.get(r.order_item_id);
+    if (!orig) continue;
+    const qty = Math.max(0, Math.floor(Number(r.quantity || 0)));
+    if (qty <= 0) continue;
+    const unit = num(orig.price_at_purchase);
+    totalRefund += unit * qty;
+    lines.push({ product_id: orig.product_id, variant_id: orig.variant_id, quantity: -qty, price_at_purchase: String(unit) });
+  }
+  if (lines.length === 0) return { ok: false, error: 'No valid return quantities' } as const;
+
+  const { data: retOrder, error: orderErr } = await (supabase as any)
+    .from('orders')
+    .insert({
+      user_id: null,
+      guest_email: null,
+      total_amount: String(-totalRefund),
+      status: 'return',
+      shipping_address: { return_of: orderId },
+    } as any)
+    .select('id')
+    .single();
+  if (orderErr) throw orderErr;
+  const retOrderId = retOrder.id as string;
+
+  const retItems = lines.map((l) => ({
+    order_id: retOrderId,
+    product_id: l.product_id,
+    variant_id: l.variant_id,
+    quantity: l.quantity, // negative
+    price_at_purchase: l.price_at_purchase,
+  }));
+  const { error: riErr } = await (supabase as any).from('order_items').insert(retItems as any);
+  if (riErr) throw riErr;
+
+  // Increase stock for returned quantities
+  for (const l of lines) {
+    const qty = Math.abs(l.quantity);
+    const { data: v, error: vErr } = await (supabase as any)
+      .from('product_variants')
+      .select('stock_quantity')
+      .eq('id', l.variant_id)
+      .single();
+    if (vErr) throw vErr;
+    const current = num(v?.stock_quantity ?? 0);
+    const { error: upErr } = await (supabase as any)
+      .from('product_variants')
+      .update({ stock_quantity: current + qty } as any)
+      .eq('id', l.variant_id);
+    if (upErr) throw upErr;
+  }
+
+  revalidatePath('/pos');
+  return { ok: true, order_id: retOrderId, refund_amount: totalRefund } as const;
+}
+
 
 function num(x: string | number | null | undefined) {
   if (x == null) return 0;
